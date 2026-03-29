@@ -358,7 +358,7 @@ MODELS = {
     },
     "lite": {
         "primary": {
-            "model": "gemini/gemini-2.0-flash-lite",
+            "model": "gemini/gemini-2.5-flash-lite",
             "api_key": GEMINI_API_KEY,
             "label": "Lite (Gemini Flash-Lite)",
             "cost_per_1k_tokens": 0.00005,  # $0.00005 per 1K
@@ -490,7 +490,7 @@ Pro         ($0.0008/1K)  │────┘
 │ 🔍 View Raw Error Details ▼                              │
 │    Code: 429 Rate Limited                                 │
 │    Fallback Path:                                          │
-│      ❌ gemini/gemini-2.0-flash-lite  (FAILED)            │
+│      ❌ gemini/gemini-2.5-flash-lite  (FAILED)            │
 │          │                                                 │
 │          ▼                                                 │
 │      ✅ groq/llama-3.1-8b-instant    (SUCCESS)            │
@@ -1162,7 +1162,7 @@ Tip: Enable billing in Google Cloud Console
 
 ```
 Attempt 1:
-❌ gemini/gemini-2.0-flash-lite  (FAILED)
+❌ gemini/gemini-2.5-flash-lite  (FAILED)
    └─ Error: 429 Rate Limited
               │
               ▼

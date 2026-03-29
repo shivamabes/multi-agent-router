@@ -1,76 +1,96 @@
+"""
+Query Router — Classifies queries into agent type + complexity.
+Uses fast cheap model (LLaMA 8B) so routing overhead is minimal.
+"""
+
 import json
 import time
 import litellm
-from config import ROUTER_MODEL, MODELS
+from config import ROUTER_MODEL, ALL_MODELS, TIER_DEFAULTS
 
 litellm.drop_params = True
 
-ROUTER_SYSTEM_PROMPT = """You are a query router for a multi-agent AI system.
+ROUTER_PROMPT = """You are a query classifier for a multi-agent AI system.
 
-Given a user query, you must output ONLY valid JSON (no markdown, no explanation) with exactly these fields:
-
+OUTPUT: Only valid JSON, nothing else.
 {
   "agent": "<coding|reasoning|math>",
   "complexity": "<simple|medium|complex>",
-  "reason": "<one line explanation>"
+  "confidence": <0.0 to 1.0>,
+  "reason": "<brief explanation>"
 }
 
-RULES:
-- "coding" → programming, code generation, debugging, algorithms, data structures
-- "math" → calculations, equations, proofs, statistics, linear algebra
-- "reasoning" → logic, analysis, comparisons, planning, general knowledge
+AGENT RULES:
+- coding → needs CODE output (write/debug/implement code, SQL, scripts, algorithms)
+- math → needs MATH work (calculations, equations, proofs, statistics)
+- reasoning → needs ANALYSIS (comparisons, explanations, planning, facts, logic)
 
 COMPLEXITY:
-- "simple" → trivial tasks (add two numbers, print hello world, basic facts)
-- "medium" → moderate tasks (sort algorithm, solve quadratic, compare concepts)
-- "complex" → hard tasks (system design, proofs, optimize code, multi-step reasoning)
+- simple → one-step obvious answer ("2+2", "hello world", "capital of France")
+- medium → multi-step standard task ("binary search", "quadratic equation", "X vs Y")
+- complex → deep expertise needed ("system design", "proofs", "architecture decisions")
 
-Output ONLY the JSON object. Nothing else."""
+EDGE CASES:
+- "explain quicksort" → reasoning (wants explanation)
+- "implement quicksort" → coding (wants code)
+- Unsure about complexity → default "medium"
+- Unsure about agent → default "reasoning"
+
+Output ONLY the JSON."""
 
 
 def route_query(query: str) -> dict:
-    """Classify query into agent type + complexity tier. Returns routing info + latency."""
     start = time.time()
 
     response = litellm.completion(
         model=ROUTER_MODEL["model"],
         api_key=ROUTER_MODEL["api_key"],
         messages=[
-            {"role": "system", "content": ROUTER_SYSTEM_PROMPT},
+            {"role": "system", "content": ROUTER_PROMPT},
             {"role": "user", "content": query},
         ],
         temperature=0,
-        max_tokens=150,
+        max_tokens=200,
     )
 
-    routing_latency = (time.time() - start) * 1000  # ms
+    latency = (time.time() - start) * 1000
 
     raw = response.choices[0].message.content.strip()
-    # Clean markdown fences if present
     if raw.startswith("```"):
         raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
 
     try:
-        result = json.loads(raw)
+        parsed = json.loads(raw)
     except json.JSONDecodeError:
-        result = {"agent": "reasoning", "complexity": "medium", "reason": "Failed to parse, defaulting"}
+        parsed = {"agent": "reasoning", "complexity": "medium", "confidence": 0.3, "reason": "Parse failed"}
 
-    # Map complexity to model tier
-    complexity_to_tier = {
-        "simple": "lite",
-        "medium": "standard",
-        "complex": "pro",
-    }
-    tier = complexity_to_tier.get(result.get("complexity", "medium"), "standard")
-    model_config = MODELS[tier]
+    agent = parsed.get("agent", "reasoning")
+    if agent not in ("coding", "math", "reasoning"):
+        agent = "reasoning"
+
+    complexity = parsed.get("complexity", "medium")
+    if complexity not in ("simple", "medium", "complex"):
+        complexity = "medium"
+
+    confidence = parsed.get("confidence", 0.5)
+    try:
+        confidence = max(0.0, min(1.0, float(confidence)))
+    except (TypeError, ValueError):
+        confidence = 0.5
+
+    tier = {"simple": "lite", "medium": "standard", "complex": "pro"}[complexity]
+    model_key = TIER_DEFAULTS[tier]
+    model_cfg = ALL_MODELS[model_key]
 
     return {
-        "agent": result.get("agent", "reasoning"),
-        "complexity": result.get("complexity", "medium"),
-        "reason": result.get("reason", ""),
+        "agent": agent,
+        "complexity": complexity,
+        "confidence": confidence,
+        "reason": parsed.get("reason", ""),
         "tier": tier,
-        "model": model_config["model"],
-        "model_label": model_config["label"],
-        "routing_latency_ms": round(routing_latency, 1),
+        "model_key": model_key,
+        "model": model_cfg["model"],
+        "model_label": model_cfg["label"],
+        "routing_latency_ms": round(latency, 1),
         "router_tokens": response.usage.total_tokens if response.usage else 0,
     }

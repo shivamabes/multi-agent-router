@@ -1,137 +1,153 @@
+"""
+Sub-Agent Engine — Sophisticated prompts + automatic fallback.
+"""
+
 import time
 import litellm
-import streamlit as st
-from config import MODELS
+from config import ALL_MODELS
 
 litellm.drop_params = True
 
-AGENT_SYSTEM_PROMPTS = {
-    "coding": """You are an expert coding assistant. You write clean, correct, well-commented code.
-Always provide the solution in proper code blocks with the language specified.
-If debugging, explain the bug and the fix clearly.""",
+AGENT_PROMPTS = {
+    "coding": """You are a senior software engineer with 10+ years of experience.
 
-    "reasoning": """You are an expert reasoning and analysis assistant.
-Think step by step. Be logical, structured, and thorough.
-Use bullet points and clear structure in your answers.""",
+EVERY response must follow this structure:
+1. **Problem Understanding** — restate in one line
+2. **Approach** — explain your strategy in 2-3 bullets
+3. **Solution** — complete, runnable code with:
+   - Language-tagged code block
+   - Type hints on functions
+   - Docstring explaining purpose
+   - Comments for non-obvious logic
+   - Edge case handling
+4. **Example Usage** — show how to use it
+5. **Complexity** — Time: O(?), Space: O(?)
 
-    "math": """You are an expert math assistant. Solve problems step by step.
-Show all work clearly. Use proper mathematical notation where possible.
-Double-check your calculations before presenting the final answer.""",
+RULES: Never give partial code. Handle edge cases. State assumptions.""",
+
+    "math": """You are an expert mathematician and patient tutor.
+
+EVERY response must follow this structure:
+1. **Problem Type** — classify it (algebra, calculus, proof, etc.)
+2. **Given** — list known information
+3. **Method** — state which formula/theorem you'll use
+4. **Solution** — numbered steps, show EVERY calculation
+5. **Verification** — check answer using different method
+6. **Final Answer** — clearly highlighted
+
+RULES: Never skip steps. Always verify. Show all arithmetic.""",
+
+    "reasoning": """You are a senior analyst and strategic thinker.
+
+EVERY response must follow this structure:
+1. **Understanding** — restate the question
+2. **Key Factors** — list important considerations
+3. **Analysis** — structured exploration:
+   - Comparisons → use a table
+   - Explanations → use numbered steps
+   - Decisions → list options with pros/cons
+4. **Conclusion** — clear direct answer
+5. **Recommendation** — actionable next steps
+
+RULES: Be specific. Use tables for comparisons. Consider multiple angles.""",
 }
 
 
-def _call_llm(model: str, api_key: str, system_prompt: str, query: str):
-    """Single LLM call, returns (response, latency_ms)."""
-    start = time.time()
-    response = litellm.completion(
-        model=model,
-        api_key=api_key,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": query},
-        ],
-        temperature=0.3,
-        max_tokens=2048,
-    )
-    latency = (time.time() - start) * 1000
-    return response, latency
+def run_agent(query: str, agent_type: str, model_key: str) -> dict:
+    """Execute agent with specified model. Auto-fallback on failure."""
 
+    prompt = AGENT_PROMPTS.get(agent_type, AGENT_PROMPTS["reasoning"])
 
-def run_agent(query: str, agent_type: str, tier: str) -> dict:
-    """Execute sub-agent with dynamic model. For lite tier, try Gemini first then fallback to Groq."""
+    if model_key not in ALL_MODELS:
+        model_key = "standard_a"
 
-    system_prompt = AGENT_SYSTEM_PROMPTS.get(agent_type, AGENT_SYSTEM_PROMPTS["reasoning"])
+    cfg = ALL_MODELS[model_key]
+    error_msg = None
     fallback_used = False
-    gemini_error = None
+    attempted = cfg["label"]
 
-    if tier == "lite":
-        # ── Try Gemini primary first ──
-        primary = MODELS["lite"]["primary"]
-        try:
-            response, agent_latency = _call_llm(
-                primary["model"], primary["api_key"], system_prompt, query
-            )
-            model_used = primary["model"]
-            model_label = primary["label"]
-            cost_rate = primary["cost_per_1k_tokens"]
-
-        except Exception as e:
-            # ── Capture the ACTUAL error ──
-            gemini_error = str(e)
-            fallback_used = True
-
-            fallback = MODELS["lite"]["fallback"]
-            response, agent_latency = _call_llm(
-                fallback["model"], fallback["api_key"], system_prompt, query
-            )
-            model_used = fallback["model"]
-            model_label = fallback["label"] + " ⚠️"
-            cost_rate = fallback["cost_per_1k_tokens"]
-
-    else:
-        model_config = MODELS[tier]
-        response, agent_latency = _call_llm(
-            model_config["model"], model_config["api_key"], system_prompt, query
+    # Primary attempt
+    try:
+        start = time.time()
+        response = litellm.completion(
+            model=cfg["model"],
+            api_key=cfg["api_key"],
+            messages=[
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": query},
+            ],
+            temperature=0.3,
+            max_tokens=2048,
         )
-        model_used = model_config["model"]
-        model_label = model_config["label"]
-        cost_rate = model_config["cost_per_1k_tokens"]
+        latency = (time.time() - start) * 1000
 
-    total_tokens = response.usage.total_tokens if response.usage else 0
-    prompt_tokens = response.usage.prompt_tokens if response.usage else 0
-    completion_tokens = response.usage.completion_tokens if response.usage else 0
-    estimated_cost = (total_tokens / 1000) * cost_rate
+    except Exception as e:
+        error_msg = str(e)
+        fallback_used = True
+
+        # Fallback: find another model in same tier
+        tier = cfg["tier"]
+        fallback_key = None
+        for k, v in ALL_MODELS.items():
+            if v["tier"] == tier and k != model_key:
+                fallback_key = k
+                break
+        if not fallback_key:
+            fallback_key = "standard_a"
+
+        fb = ALL_MODELS[fallback_key]
+        try:
+            start = time.time()
+            response = litellm.completion(
+                model=fb["model"],
+                api_key=fb["api_key"],
+                messages=[
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": query},
+                ],
+                temperature=0.3,
+                max_tokens=2048,
+            )
+            latency = (time.time() - start) * 1000
+            cfg = fb
+            model_key = fallback_key
+
+        except Exception as e2:
+            error_msg = f"Primary: {error_msg} | Fallback: {str(e2)}"
+            last = ALL_MODELS["lite_b"]
+            start = time.time()
+            response = litellm.completion(
+                model=last["model"],
+                api_key=last["api_key"],
+                messages=[
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": query},
+                ],
+                temperature=0.3,
+                max_tokens=2048,
+            )
+            latency = (time.time() - start) * 1000
+            cfg = last
+            model_key = "lite_b"
+
+    usage = response.usage
+    total_tokens = usage.total_tokens if usage else 0
+    cost = (total_tokens / 1000) * cfg["cost_per_1k_tokens"]
 
     return {
         "response": response.choices[0].message.content,
-        "model_used": model_used,
-        "model_label": model_label,
-        "tier": tier,
+        "model_used": cfg["model"],
+        "model_label": cfg["label"],
+        "model_key": model_key,
+        "tier": cfg["tier"],
+        "provider": cfg["provider"],
         "agent": agent_type,
-        "latency_ms": round(agent_latency, 1),
-        "prompt_tokens": prompt_tokens,
-        "completion_tokens": completion_tokens,
+        "latency_ms": round(latency, 1),
+        "prompt_tokens": usage.prompt_tokens if usage else 0,
+        "completion_tokens": usage.completion_tokens if usage else 0,
         "total_tokens": total_tokens,
-        "estimated_cost": estimated_cost,
+        "estimated_cost": cost,
         "fallback_used": fallback_used,
-        "gemini_error": gemini_error,
+        "attempted_model": attempted,
+        "error": error_msg,
     }
-
-
-def compute_comparison(actual_result: dict) -> list:
-    """Show what it WOULD have cost/taken if we used every tier."""
-    comparisons = []
-
-    for tier_name in ["pro", "standard"]:
-        cfg = MODELS[tier_name]
-        token_count = actual_result["total_tokens"]
-        est_cost = (token_count / 1000) * cfg["cost_per_1k_tokens"]
-        comparisons.append({
-            "tier": tier_name,
-            "label": cfg["label"],
-            "model": cfg["model"],
-            "est_cost": est_cost,
-            "avg_latency_ms": cfg["avg_latency_ms"],
-            "was_selected": tier_name == actual_result["tier"],
-        })
-
-    lite_primary = MODELS["lite"]["primary"]
-    lite_fallback = MODELS["lite"]["fallback"]
-
-    if actual_result.get("fallback_used"):
-        lite_cfg = lite_fallback
-    else:
-        lite_cfg = lite_primary
-
-    token_count = actual_result["total_tokens"]
-    est_cost = (token_count / 1000) * lite_cfg["cost_per_1k_tokens"]
-    comparisons.append({
-        "tier": "lite",
-        "label": lite_cfg["label"],
-        "model": lite_cfg["model"],
-        "est_cost": est_cost,
-        "avg_latency_ms": lite_cfg["avg_latency_ms"],
-        "was_selected": actual_result["tier"] == "lite",
-    })
-
-    return comparisons

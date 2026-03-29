@@ -65,13 +65,14 @@ A multi-agent AI system that intelligently routes queries to specialized sub-age
 
 | Tier                 | Model                          | Use Case                                | Cost    |
 | -------------------- | ------------------------------ | --------------------------------------- | ------- |
-| 🟢 **Lite**          | `gemini/gemini-2.0-flash-lite` | Simple tasks (add numbers, basic facts) | Lowest  |
+| 🟢 **Lite**          | `gemini/gemini-2.5-flash-lite` | Simple tasks (add numbers, basic facts) | Lowest  |
 | 🟢 **Lite Fallback** | `groq/llama-3.1-8b-instant`    | When Gemini rate-limited                | Low     |
 | 🟠 **Standard**      | `groq/llama-3.1-8b-instant`    | Medium tasks (algorithms, comparisons)  | Medium  |
 | 🔴 **Pro**           | `groq/llama-3.3-70b-versatile` | Complex tasks (system design, proofs)   | Highest |
 | 🔧 **Router**        | `groq/llama-3.1-8b-instant`    | Query classification only               | Minimal |
 
 ---
+
 ## 🚀 Quick Start
 
 ### 1. Clone the Repository
@@ -200,3 +201,4 @@ Google Gemini — Gemini Flash-Lite for lightweight tasks
  Query logging and analytics dashboard
  Authentication for access control
  A/B testing between model tiers
+```
