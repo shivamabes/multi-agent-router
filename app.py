@@ -18,7 +18,7 @@ st.set_page_config(page_title="Deep Agent v2.0", layout="wide", page_icon="🤖"
 st.markdown("""
 <style>
     [data-testid="stMetric"] {
-        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+        background: linear-gradient(135deg, #1e6f7ff 0%, #cceeff 100%);
         border: 1px solid #334155;
         border-radius: 12px;
         padding: 16px 12px;
